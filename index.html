@@ -1219,7 +1219,7 @@
 
         <div style="display:flex; gap:8px;">
           <button class="btn-principal btn-secondary" style="margin:0; font-size:12.5px; padding:9px 14px; width:auto;" onclick="fecharModalDetalhesAtestado()">Fechar</button>
-          <button class="btn-principal" style="background-color:#2563eb; color:white; border:none; margin:0; font-size:12.5px; padding:9px 14px; display:inline-flex; align-items:center; gap:6px; width:auto;" onclick="acionarEditarAtestadoAtual()">
+          <button id="btn-editar-atestado-detalhes" class="btn-principal" style="background-color:#2563eb; color:white; border:none; margin:0; font-size:12.5px; padding:9px 14px; display:inline-flex; align-items:center; gap:6px; width:auto;" onclick="acionarEditarAtestadoAtual()">
             ✏️ Editar
           </button>
         </div>
@@ -1722,6 +1722,14 @@
 
         const chaveUpper = String(nomeEstudante).toUpperCase().trim();
 
+        const aluno = SIMULACAO_ESTUDANTES_PADRAO.find(a => 
+          String(a.nome || '').toUpperCase().trim() === chaveUpper || 
+          String(a.simade || '').toUpperCase().trim() === chaveUpper
+        );
+        if (aluno && aluno.inativo) {
+          throw new Error("Estudantes INATIVOS não podem ter atestado médico cadastrado.");
+        }
+
         // Registra o atestado na memória da simulação
         if (typeof window !== 'undefined') {
           if (!window._ATESTADOS_SIMULADOS) window._ATESTADOS_SIMULADOS = {};
@@ -1736,12 +1744,9 @@
           };
         }
 
-        const aluno = SIMULACAO_ESTUDANTES_PADRAO.find(a => 
-          String(a.nome || '').toUpperCase().trim() === chaveUpper || 
-          String(a.simade || '').toUpperCase().trim() === chaveUpper
-        );
         if (aluno) {
           aluno.statusHoje = 'A';
+          aluno.status = 'A';
           aluno.atestado = true;
           aluno.faltaJustificada = true;
         }
@@ -1763,6 +1768,11 @@
 
         if (typeof window !== 'undefined' && window._ATESTADOS_SIMULADOS) {
           delete window._ATESTADOS_SIMULADOS[chaveUpper];
+          for (const k of Object.keys(window._ATESTADOS_SIMULADOS)) {
+            if (k.toUpperCase().trim() === chaveUpper || chaveUpper.includes(k.toUpperCase().trim())) {
+              delete window._ATESTADOS_SIMULADOS[k];
+            }
+          }
         }
 
         const aluno = SIMULACAO_ESTUDANTES_PADRAO.find(a => 
@@ -1771,8 +1781,13 @@
         );
         if (aluno) {
           aluno.statusHoje = '•';
+          aluno.status = '•';
           aluno.atestado = false;
+          aluno.atestadoInfo = null;
           aluno.faltaJustificada = false;
+          if (Array.isArray(aluno.historico)) {
+            aluno.historico = aluno.historico.map(h => h === 'A' ? '•' : h);
+          }
         }
 
         return {
@@ -2621,14 +2636,14 @@
           listaAlunosAtestadoAtual = alunos;
           datasPlanilhaAtestado = (payload && payload.datas) ? payload.datas : [];
 
-          // Preenche o seletor do modal
+          // Preenche o seletor do modal (apenas estudantes ATIVOS)
           const selectAlunos = document.getElementById('select-estudante-atestado');
           if (selectAlunos) {
+            const alunosAtivos = alunos.filter(a => !a.inativo);
             selectAlunos.innerHTML = '<option value="">-- Selecione o Estudante --</option>' + 
-              alunos.map(a => {
-                const rotuloInativo = a.inativo ? ' (INATIVO)' : '';
+              alunosAtivos.map(a => {
                 const simadeText = a.simade ? `${a.simade} - ` : '';
-                return `<option value="${a.nome}">${simadeText}${a.nome}${rotuloInativo}</option>`;
+                return `<option value="${a.nome}">${simadeText}${a.nome}</option>`;
               }).join('');
           }
 
@@ -2798,7 +2813,21 @@
         listaEstudantesAtestadoAtualFiltrada = filtrados;
 
         let botoesAcaoHtml = '';
-        if (atestado.temAtestado) {
+        if (inativo) {
+          if (atestado.temAtestado) {
+            botoesAcaoHtml = `
+              <button type="button" class="btn-acao-atestado btn-atestado-detalhes" onclick="abrirModalDetalhesAtestadoPorIndice(${idx})" title="Ver detalhes ou excluir atestado deste estudante">
+                🔍 Consultar / Excluir
+              </button>
+            `;
+          } else {
+            botoesAcaoHtml = `
+              <span style="font-size:11px; font-weight:600; color:#94a3b8; background:#f8fafc; border:1px solid #e2e8f0; border-radius:4px; padding:5px 8px; display:inline-flex; align-items:center; gap:4px;" title="Estudantes inativos não podem receber lançamento de atestado">
+                🔒 Inativo (Bloqueado)
+              </span>
+            `;
+          }
+        } else if (atestado.temAtestado) {
           botoesAcaoHtml = `
             <button type="button" class="btn-acao-atestado btn-atestado-detalhes" onclick="abrirModalDetalhesAtestadoPorIndice(${idx})" title="Ver detalhes, editar ou excluir atestado">
               🔍 Consultar / Alterar
@@ -2850,6 +2879,10 @@
     function abrirModalCadastrarAtestadoPorIndice(idx) {
       const item = listaEstudantesAtestadoAtualFiltrada[idx];
       if (!item || !item.aluno) return;
+      if (item.aluno.inativo) {
+        mostrarModal("ESTUDANTE INATIVO", "Estudantes INATIVOS não podem ter a opção de cadastrar atestado.");
+        return;
+      }
       abrirModalCadastrarAtestadoPara(item.aluno.nome, item.aluno.simade);
     }
 
@@ -2860,6 +2893,17 @@
     }
 
     function abrirModalCadastrarAtestadoPara(nomeOpcional, simadeOpcional) {
+      if (nomeOpcional) {
+        const alunoAlvo = dadosAlunosAtestadoTurma.find(a => 
+          String(a.nome || '').toUpperCase().trim() === String(nomeOpcional).toUpperCase().trim() ||
+          String(a.simade || '').toUpperCase().trim() === String(nomeOpcional).toUpperCase().trim()
+        );
+        if (alunoAlvo && alunoAlvo.inativo) {
+          mostrarModal("ESTUDANTE INATIVO", "Estudantes INATIVOS não podem ter a opção de cadastrar atestado.");
+          return;
+        }
+      }
+
       limparFormularioAtestado();
       modoEdicaoAtestado = false;
       const titulo = document.getElementById('form-atestado-titulo');
@@ -2968,6 +3012,11 @@
         divObs.innerText = atestado.obs ? atestado.obs : 'Nenhuma observação ou CID informado no registro.';
       }
 
+      const btnEditar = document.getElementById('btn-editar-atestado-detalhes');
+      if (btnEditar) {
+        btnEditar.style.display = aluno.inativo ? 'none' : 'inline-flex';
+      }
+
       const modal = document.getElementById('modal-detalhes-atestado');
       if (modal) {
         modal.style.display = 'flex';
@@ -2986,6 +3035,10 @@
     function acionarEditarAtestadoAtual() {
       if (!estudanteAtestadoSelecionado) return;
       const aluno = estudanteAtestadoSelecionado;
+      if (aluno.inativo) {
+        mostrarModal("AÇÃO NÃO PERMITIDA", "Estudantes INATIVOS não podem ter atestado médico cadastrado ou editado.");
+        return;
+      }
       const atestado = extrairDadosAtestado(aluno);
 
       fecharModalDetalhesAtestado();
@@ -3048,10 +3101,43 @@
       fecharModalFormAtestado(true);
       mostrarResultado('loading-inline', 'Excluindo Atestado Médico', 'Removendo registros de abono da planilha...');
 
+      const nomeUpperAlvo = String(nomeEstudante || '').toUpperCase().trim();
+
+      // Limpeza imediata no cache de atestados simulados
+      if (typeof window !== 'undefined' && window._ATESTADOS_SIMULADOS) {
+        delete window._ATESTADOS_SIMULADOS[nomeUpperAlvo];
+        for (const k of Object.keys(window._ATESTADOS_SIMULADOS)) {
+          if (k.toUpperCase().trim() === nomeUpperAlvo || nomeUpperAlvo.includes(k.toUpperCase().trim())) {
+            delete window._ATESTADOS_SIMULADOS[k];
+          }
+        }
+      }
+
+      // Limpeza imediata na lista em memória para atualização instantânea
+      const limparRegistroDoAluno = (a) => {
+        if (!a) return;
+        const n = String(a.nome || '').toUpperCase().trim();
+        const s = String(a.simade || '').toUpperCase().trim();
+        if (n === nomeUpperAlvo || s === nomeUpperAlvo || (n && nomeUpperAlvo.includes(n))) {
+          a.atestado = false;
+          a.status = a.inativo ? '--' : '•';
+          a.statusHoje = a.inativo ? '--' : '•';
+          a.atestadoInfo = null;
+          a.faltaJustificada = false;
+          if (Array.isArray(a.historico)) {
+            a.historico = a.historico.map(h => h === 'A' ? (a.inativo ? '--' : '•') : h);
+          }
+        }
+      };
+
+      if (Array.isArray(dadosAlunosAtestadoTurma)) dadosAlunosAtestadoTurma.forEach(limparRegistroDoAluno);
+      if (Array.isArray(listaAlunosAtestadoAtual)) listaAlunosAtestadoAtual.forEach(limparRegistroDoAluno);
+
       google.script.run
         .withSuccessHandler(res => {
+          recarregarDadosAtestadosTurma(true);
           mostrarModal("ATESTADO EXCLUÍDO", (res && res.mensagem) ? res.mensagem : "Atestado médico excluído com sucesso!", () => {
-            recarregarDadosAtestadosTurma();
+            renderizarListaEstudantesAtestado();
           });
         })
         .withFailureHandler(err => {
@@ -3097,6 +3183,15 @@
 
       if (!nomeEstudante) {
         mostrarModal("ATENÇÃO", "Por favor, selecione o estudante que apresentou o atestado médico.");
+        return;
+      }
+
+      const alunoAlvo = dadosAlunosAtestadoTurma.find(a => 
+        String(a.nome || '').toUpperCase().trim() === String(nomeEstudante).toUpperCase().trim() ||
+        String(a.simade || '').toUpperCase().trim() === String(nomeEstudante).toUpperCase().trim()
+      );
+      if (alunoAlvo && alunoAlvo.inativo) {
+        mostrarModal("AÇÃO NÃO PERMITIDA", "Estudantes INATIVOS não podem ter a opção de cadastrar atestado.");
         return;
       }
 
